@@ -26,14 +26,15 @@ byte raw;
 byte target_raw = 0;
 int old_degree = 0;
 int new_degree = 0;
-
 bool flag = false;
-
 int degree;
+int pwm_R = 0;
+int pwm_L = 0;
 
 void setup() {
   Wire.begin();
   lcd.begin(20, 4);
+
   pinMode(Motor_L_dir_pin, OUTPUT);
   pinMode(Motor_R_dir_pin, OUTPUT);
   pinMode(Motor_L_pwm_pin, OUTPUT);
@@ -45,217 +46,211 @@ void setup() {
   pinMode(JOY_X_PIN, INPUT);
   pinMode(JOY_Y_PIN, INPUT);
   pinMode(joystickButtonPin, INPUT_PULLUP);
+
   attachInterrupt(digitalPinToInterrupt(joystickButtonPin), buttonhPressedISR, FALLING);
   attachInterrupt(digitalPinToInterrupt(ENC_LEFT_B), pulseCountForLeftWheel, FALLING);
-  attachInterrupt(digitalPinToInterrupt(ENC_RIGHT_B), pulseCountForLRightWheel, FALLING);
-  attachInterrupt(digitalPinToInterrupt(ENC_LEFT_B), pluseCountForBothWheels, FALLING);
-  attachInterrupt(digitalPinToInterrupt(ENC_RIGHT_B), pluseCountForBothWheels, FALLING);
+  attachInterrupt(digitalPinToInterrupt(ENC_RIGHT_B), pulseCountForRightWheel, FALLING);
   Serial.begin(9600);
 }
 
 void loop() {
-  int pwm_R = 0;
-  int pwm_L = 0;
+  pwm_R = 0;
+  pwm_L = 0;
+  // Read compass data and display direction
+  readCompass();
 
-  // Request a single byte (8 bits) of data from the compass sensor
-  Wire.beginTransmission(CMPS14_Address);
-  Wire.write(1);
-  Wire.endTransmission();
-
-  // Read the data from the compass sensor
-  Wire.requestFrom(CMPS14_Address, 1, true);
-  if (Wire.available() >= 1) {
-    raw = Wire.read();  // Read the 8-bit bearing value
-
-    lcd.clear();
-
-    if (raw > 175 && raw < 210) {
-      lcd.setCursor(0, 0);
-      lcd.print("Direction: N ");
-    } else if (raw > 225 && raw < 240) {
-      lcd.setCursor(0, 0);
-      lcd.print("Direction: NE");
-    } else if (raw >= 0 && raw < 10) {
-      lcd.setCursor(0, 0);
-      lcd.print("Direction: E");
-    } else if (raw > 35 && raw < 50) {
-      lcd.setCursor(0, 0);
-      lcd.print("Direction: SE");
-    } else if (raw > 55 && raw < 75) {
-      lcd.setCursor(0, 0);
-      lcd.print("Direction: S");
-    } else if (raw > 90 && raw < 105) {
-      lcd.setCursor(0, 0);
-      lcd.print("Direction: SW");
-    } else if (raw > 120 && raw < 140) {
-      lcd.setCursor(0, 0);
-      lcd.print("Direction: W");
-    } else if (raw > 155 && raw < 175) {
-      lcd.setCursor(0, 0);
-      lcd.print("Direction: NW");
-    }
-
-    //display degreed
-    lcd.setCursor(0, 1);
-    degree = (int(raw) / 255.0) * 360;
-    lcd.print("Degreed: ");
-    if (degree + 90 > 360) {
-      lcd.print(0);
-    } else {
-      lcd.print(degree + 90);
-    }
-    lcd.print("\xDF");
-
-    //display pulsecount for both wheels
-    lcd.setCursor(0, 2);
-    lcd.print("Pulse Count: ");
-    lcd.print(pulseCount);
-
-    //display distance
-    distance = (pulseCount * wheelDistanceRevolution) / PPR;
-    lcd.setCursor(0, 3);
-    lcd.print("Distance: ");
-    lcd.print(distance);
-  }
-
-  //Control with joystick
+  // Control the robot with joystick or serial commands
   if (buttonPressed) {
-    int joyX = analogRead(JOY_X_PIN);
-    int joyY = analogRead(JOY_Y_PIN);
-    if (joyY > 600) {
-      pwm_R = map(joyY, 600, 1023, 0, 255);
-      pwm_L = map(joyY, 600, 1023, 0, 255);
-      digitalWrite(Motor_R_dir_pin, Motor_forward);
-      digitalWrite(Motor_L_dir_pin, Motor_forward);
-    } else if (joyY < 400) {
-      pwm_R = map(joyY, 400, 0, 0, 255);
-      pwm_L = map(joyY, 400, 0, 0, 255);
-      digitalWrite(Motor_R_dir_pin, Motor_return);
-      digitalWrite(Motor_L_dir_pin, Motor_return);
-    }
-
-    if (joyX > 600) {
-      pwm_L = map(joyX, 600, 1023, 0, 255);
-      digitalWrite(Motor_L_dir_pin, Motor_forward);
-    } else if (joyX < 400) {
-      pwm_R = map(joyX, 400, 0, 0, 255);
-      digitalWrite(Motor_R_dir_pin, Motor_forward);
-    }
+    controlWithJoystick();
   } else {
-    //Control through webpage
-    if (Serial.available() > 0) {
-      String message = Serial.readStringUntil('\n');
-      Serial.print("Message received, content: ");
-      Serial.println(message);
-      int dist = message.indexOf("Move");
-      int dire = message.indexOf("Turn");
-
-      if (dist > -1) {
-        Serial.println("Command = Move ");
-        dist = message.indexOf(":");
-
-        if (dist > -1) {
-          String stat = message.substring(dist + 1);
-          intDist = stat.toInt();
-          pulsesForStatcm = (intDist / wheelDistanceRevolution) * PPR;
-          Serial.println(intDist);
-        }
-      } else if (dire > -1) {
-        Serial.println("Command = Turn ");
-        dire = message.indexOf(":");
-
-        if (dire > -1) {
-          String stat = message.substring(dire + 1);
-          new_degree = stat.toInt();
-          target_raw = (new_degree * 255 / 360 + 255) % 255;  // 输入为最终角度
-          //target_raw = (new_degree * 255 / 360 + 255 + raw) % 255;  // 输入为角度差值
-        }
-      } else {
-        Serial.println("No number found, try typing Move/Turn:Number");
-      }
-    }
-
-    //Control forward and return
-    if (intDist > 0) {
-      if (iL < pulsesForStatcm) {
-        flag = true;
-        pwm_R = 255;
-        pwm_L = 255;
-        digitalWrite(Motor_R_dir_pin, Motor_forward);
-        digitalWrite(Motor_L_dir_pin, Motor_forward);
-      } else {
-        intDist = 0;
-        iL = 0;
-        flag = false;
-      }
-    } else if (intDist < 0) {
-      if (iL < (pulsesForStatcm / -1)) {
-        flag = true;
-        pwm_R = 255;
-        pwm_L = 255;
-        digitalWrite(Motor_R_dir_pin, Motor_return);
-        digitalWrite(Motor_L_dir_pin, Motor_return);
-      } else {
-        intDist = 0;
-        iL = 0;
-        flag = false;
-      }
-    }
-
-    // 输入为最终角度
-    //control final direction
-    if (new_degree > old_degree) {
-      // turn right - left wheel
-      pwm_L = 155;
-      digitalWrite(Motor_L_dir_pin, Motor_forward);
-    } else if (new_degree < old_degree) {
-      // turn left - right wheel
-      pwm_R = 155;
-      digitalWrite(Motor_R_dir_pin, Motor_forward);
-    }
-
-    // 输入为角度差值
-    // if (new_degree > 0) {
-    //   // turn right - left wheel
-    //   pwm_L = 155;
-    //   digitalWrite(Motor_L_dir_pin, Motor_forward);
-    // } else if (new_degree < 0){
-    //   // turn left - right wheel
-    //   pwm_R = 155;
-    //   digitalWrite(Motor_R_dir_pin, Motor_forward);
-    // }
-
-    //when the final direction have been reached, stop the car
-    if (!flag) {
-      if ((raw + 255 - target_raw) % 255 <= 10 || (target_raw + 255 - raw) % 255 <= 10) {
-        // stop turning
-        pwm_R = 0;
-        pwm_L = 0;
-        old_degree = new_degree;  // 输入为最终角度
-      }
-    }
+    controlWithWebBrowser();
   }
 
+  // Write PWM values to motors
   analogWrite(Motor_L_pwm_pin, pwm_L);
   analogWrite(Motor_R_pwm_pin, pwm_R);
 }
 
-void pulseCountForLeftWheel() {
-  iL++;
-}
-void pulseCountForRightWheel() {
-  iR++;
+void readCompass() {
+  // Request and read data from compass sensor
+  Wire.beginTransmission(CMPS14_Address);
+  Wire.write(1);
+  Wire.endTransmission();
+  Wire.requestFrom(CMPS14_Address, 1, true);
+
+  if (Wire.available() >= 1) {
+    raw = Wire.read();  // Read the 8-bit bearing value
+    displayToLcd(raw);  // Display direction on LCD
+  }
 }
 
-void pluseCountForBothWheels() {
+void displayToLcd(byte raw) {
+  // Clear LCD and set cursor to start
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  //display direction
+  if (raw > 175 && raw < 210) {
+    lcd.print("Direction: N ");
+  } else if (raw > 225 && raw < 240) {
+    lcd.print("Direction: NE");
+  } else if (raw >= 0 && raw < 10) {
+    lcd.print("Direction: E");
+  } else if (raw > 35 && raw < 50) {
+    lcd.print("Direction: SE");
+  } else if (raw > 55 && raw < 75) {
+    lcd.print("Direction: S");
+  } else if (raw > 90 && raw < 105) {
+    lcd.print("Direction: SW");
+  } else if (raw > 120 && raw < 140) {
+    lcd.print("Direction: W");
+  } else if (raw > 155 && raw < 175) {
+    lcd.print("Direction: NW");
+  }
+
+  //display degreed
+  lcd.setCursor(0, 1);
+  degree = (int(raw) / 255.0) * 360;
+  lcd.print("Degreed: ");
+  if (degree + 90 == 361) {
+    lcd.print(0);
+    lcd.print("\xDF");
+    lcd.print("/360");
+  } else if (degree + 90 > 360)
+    lcd.print(degree - 270);
+  else {
+    lcd.print(degree + 90);
+  }
+  lcd.print("\xDF");
+
+  //display pulsecount for both wheels
+  lcd.setCursor(0, 2);
+  lcd.print("Pulse Count: ");
+  lcd.print(pulseCount);
+
+  //display distance
+  distance = (pulseCount * wheelDistanceRevolution) / PPR;
+  lcd.setCursor(0, 3);
+  lcd.print("Distance: ");
+  lcd.print(distance);
+}
+
+void controlWithJoystick() {
+  int joyX = analogRead(JOY_X_PIN);
+  int joyY = analogRead(JOY_Y_PIN);
+  if (joyY > 600) {
+    pwm_R = map(joyY, 600, 1023, 0, 255);
+    pwm_L = map(joyY, 600, 1023, 0, 255);
+    digitalWrite(Motor_R_dir_pin, Motor_forward);
+    digitalWrite(Motor_L_dir_pin, Motor_forward);
+  } else if (joyY < 400) {
+    pwm_R = map(joyY, 400, 0, 0, 255);
+    pwm_L = map(joyY, 400, 0, 0, 255);
+    digitalWrite(Motor_R_dir_pin, Motor_return);
+    digitalWrite(Motor_L_dir_pin, Motor_return);
+  }
+
+  if (joyX > 600) {
+    pwm_L = map(joyX, 600, 1023, 0, 255);
+    digitalWrite(Motor_L_dir_pin, Motor_forward);
+  } else if (joyX < 400) {
+    pwm_R = map(joyX, 400, 0, 0, 255);
+    digitalWrite(Motor_R_dir_pin, Motor_forward);
+  }
+}
+
+void controlWithWebBrowser() {
+  if (Serial.available() > 0) {
+    String message = Serial.readStringUntil('\n');
+    Serial.print("Message received, content: ");
+    Serial.println(message);
+    int dist = message.indexOf("Move");
+    int dire = message.indexOf("Turn");
+
+    if (dist > -1) {
+      Serial.println("Command = Move ");
+      dist = message.indexOf(":");
+
+      if (dist > -1) {
+        String stat = message.substring(dist + 1);
+        intDist = stat.toInt();
+        pulsesForStatcm = (intDist / wheelDistanceRevolution) * PPR;
+        Serial.println(intDist);
+      }
+    } else if (dire > -1) {
+      Serial.println("Command = Turn ");
+      dire = message.indexOf(":");
+
+      if (dire > -1) {
+        String stat = message.substring(dire + 1);
+        new_degree = stat.toInt();
+        target_raw = (new_degree * 255 / 360 + 255) % 255;  // Define final direction
+      }
+    } else {
+      Serial.println("No number found, try typing Move/Turn:Number");
+    }
+  }
+
+  //Control forward and return
+  if (intDist > 0) {
+    if (iL < pulsesForStatcm) {
+      Serial.println(iL);
+      Serial.println(iR);
+      Serial.println(pulseCount);
+      flag = true;
+      pwm_R = 255;
+      pwm_L = 255;
+      digitalWrite(Motor_R_dir_pin, Motor_forward);
+      digitalWrite(Motor_L_dir_pin, Motor_forward);
+    } else {
+      intDist = 0;
+      iL = 0;
+      flag = false;
+    }
+  } else if (intDist < 0) {
+    if (iL < (pulsesForStatcm / -1)) {
+      flag = true;
+      pwm_R = 255;
+      pwm_L = 255;
+      digitalWrite(Motor_R_dir_pin, Motor_return);
+      digitalWrite(Motor_L_dir_pin, Motor_return);
+    } else {
+      intDist = 0;
+      iL = 0;
+      flag = false;
+    }
+  }
+
+  //control final direction
+  if (new_degree > old_degree) {
+    pwm_L = 155;
+    digitalWrite(Motor_L_dir_pin, Motor_forward);
+  } else if (new_degree < old_degree) {
+    pwm_R = 155;
+    digitalWrite(Motor_R_dir_pin, Motor_forward);
+  }
+
+  //when the final direction(raw) have been reached, stop the car
+  if (!flag) {
+    if ((raw + 255 - target_raw) % 255 <= 10 || (target_raw + 255 - raw) % 255 <= 10) {
+      // stop turning
+      pwm_R = 0;
+      pwm_L = 0;
+      old_degree = new_degree;
+    }
+  }
+}
+
+void pulseCountForLeftWheel() {
+  iL++;
+  pulseCount++;
+}
+
+void pulseCountForRightWheel() {
+  iR++;
   pulseCount++;
 }
 
 //change the button status to control the car with joystick
 void buttonhPressedISR() {
-  if (buttonPressed) {
-    buttonPressed = false;
-  } else {
-    buttonPressed = true;
-  }
+  buttonPressed = !buttonPressed;
 }
